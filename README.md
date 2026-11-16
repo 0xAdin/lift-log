@@ -1,6 +1,6 @@
 # Lift Log
 
-A four-day lifting tracker: session warmups, a get-back-into-it week, weekly jumps that switch to a 4-week wave after a stall, must-dos for short days, add-ons, a rest timer, and a progress page.
+A four-day lifting tracker: session warmups, a two-week ramp-up, weekly jumps that switch to a 4-week wave after a stall, must-dos for short days, add-ons, a rest timer, and a progress page.
 
 It is a static site with no build step. `index.html` is the whole app; `sw.js` lets it open offline.
 

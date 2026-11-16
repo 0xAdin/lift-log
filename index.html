@@ -309,7 +309,7 @@ function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padSta
 function parseYmd(s) { const p = s.split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
 function newLift() { return { w: null, mode: 'linear', hard: 0, since: 0, base: null, wk: 1, w3hard: false }; }
 function defaultState() {
-  return { v: 2, lifts: { squat: newLift(), bench: newLift(), trap: newLift() }, acc: {}, next: 1, returnLeft: [1, 2, 3, 4], d4Deload: false,
+  return { v: 2, lifts: { squat: newLift(), bench: newLift(), trap: newLift() }, acc: {}, next: 1, returnLeft: [1, 2, 3, 4], ramp2: [1, 2, 3, 4], d4Deload: false,
     pins: { 1: [], 2: [], 3: [], 4: [] }, custom: [], draft: null, restOn: true };
 }
 function normalize(s) {
@@ -326,6 +326,7 @@ function normalize(s) {
   out.pins = Object.assign({ 1: [], 2: [], 3: [], 4: [] }, s.pins || {});
   out.acc = s.acc || {}; out.custom = Array.isArray(s.custom) ? s.custom : [];
   out.returnLeft = Array.isArray(s.returnLeft) ? s.returnLeft : [];
+  out.ramp2 = Array.isArray(s.ramp2) ? s.ramp2 : [1, 2, 3, 4];
   return out;
 }
 function library(state) { return ADDONS.concat(state.custom); }
@@ -333,8 +334,8 @@ function findAddon(state, key) { return library(state).find(a => a.key === key);
 function deloadDue(L) { return (L.mode === 'linear' && L.since >= 4) || (L.mode === 'wave' && L.wk === 4); }
 function dayDeloadDue(state, day) { const m = DAYS[day].main; return m ? deloadDue(state.lifts[m]) : !!state.d4Deload; }
 function blankDraft(state, day, now) {
-  const ret = state.returnLeft.includes(day);
-  return { day, date: ymd(now), ret, deload: !ret && dayDeloadDue(state, day), short: false, warm: {}, skipWarm: false, done: {}, sets: {}, w: {}, feel: {}, top: {}, addons: ret ? [] : (state.pins[day] || []).slice() };
+  const ret = state.returnLeft.includes(day) ? 1 : state.ramp2.includes(day) ? 2 : 0; // ramp-up week 1, week 2, or full session
+  return { day, date: ymd(now), ret, deload: !ret && dayDeloadDue(state, day), short: false, warm: {}, skipWarm: false, done: {}, sets: {}, w: {}, feel: {}, top: {}, addons: ret === 1 ? [] : (state.pins[day] || []).slice() };
 }
 /* The weight the plan asks for today on a main lift. */
 function mainTarget(L, m, draft) {
@@ -346,11 +347,11 @@ function mainTarget(L, m, draft) {
 }
 function scheme(state, item, draft) {
   if (item.type === 'main') { const L = state.lifts[item.lift];
-    if (draft.ret) return '2 × 5'; if (draft.deload) return '3 × 5';
+    if (draft.ret) return draft.ret === 2 ? '3 × 5' : '2 × 5'; if (draft.deload) return '3 × 5';
     return L.mode === 'wave' ? ({ 1: '4 × 5', 2: '4 × 4', 3: '5 × 3' }[L.wk] || '3 × 5') : '4 × 5'; }
   if (item.type === 'backoff') return '1 × 8';
   if (!item.n) return item.r || '';
-  const n = draft.ret ? Math.min(2, item.n) : draft.deload ? Math.max(2, item.n - 1) : item.n;
+  const n = draft.ret ? Math.min(draft.ret === 2 ? 3 : 2, item.n) : draft.deload ? Math.max(2, item.n - 1) : item.n;
   return n + ' × ' + item.r;
 }
 function setsCount(state, item, draft) { const n = parseInt(scheme(state, item, draft), 10); return isNaN(n) || n < 1 ? 1 : n; }
@@ -372,9 +373,9 @@ function loggedValue(state, draft, item) {
   return (v === undefined || v === null || v === '') ? suggested(state, item, draft) : Number(v);
 }
 function sessionItems(state, draft) {
-  let core = DAYS[draft.day].core.filter(i => !(draft.ret && (i.noReturn || i.type === 'backoff')) && !(draft.deload && i.type === 'backoff'));
+  let core = DAYS[draft.day].core.filter(i => !(draft.ret && i.type === 'backoff') && !(draft.ret && draft.ret !== 2 && i.noReturn) && !(draft.deload && i.type === 'backoff'));
   if (draft.short) core = core.filter(i => i.must || (i.type === 'backoff' && !draft.ret && !draft.deload));
-  const extra = (draft.ret || draft.short) ? [] : draft.addons.map(k => findAddon(state, k)).filter(Boolean).map(a => Object.assign({ addon: true }, a));
+  const extra = ((draft.ret && draft.ret !== 2) || draft.short) ? [] : draft.addons.map(k => findAddon(state, k)).filter(Boolean).map(a => Object.assign({ addon: true }, a));
   return { core, extra, all: core.concat(extra) };
 }
 function missingFeel(state, draft) {
@@ -384,7 +385,7 @@ function missingFeel(state, draft) {
 /* Applies a finished session. Returns the new state, the log entry, and plain-language notes about next time. */
 function applySession(state, draft) {
   const s = JSON.parse(JSON.stringify(state)); const notes = []; const items = sessionItems(s, draft); const D = DAYS[draft.day];
-  const entry = { id: Date.now().toString(36), kind: 'lift', date: draft.date, day: draft.day, name: D.name, ret: !!draft.ret, deload: !!draft.deload, short: !!draft.short, items: [], skipped: [] };
+  const entry = { id: Date.now().toString(36), kind: 'lift', date: draft.date, day: draft.day, name: D.name, ret: draft.ret === true ? 1 : (draft.ret || 0), deload: !!draft.deload, short: !!draft.short, items: [], skipped: [] };
   for (const it of items.all) {
     if (!draft.done[it.key]) { if (!it.addon && it.type !== 'backoff') entry.skipped.push(it.name); continue; }
     const v = it.type === 'check' ? null : loggedValue(state, draft, it);
@@ -393,7 +394,8 @@ function applySession(state, draft) {
     if (has) { rec.w = v; if (it.type === 'reps') rec.u = it.unit || 'reps'; else if (it.unit) rec.u = it.unit; }
     if (it.type === 'main' && has) {
       const L = s.lifts[it.lift], m = LIFTS[it.lift];
-      if (draft.ret) { Object.assign(L, newLift(), { w: v }); notes.push(m.name + ': starts at ' + v + ' lb for 4 × 5.'); }
+      if (draft.ret === 2) { Object.assign(L, newLift(), { w: v }); notes.push(m.name + ': starts at ' + v + ' lb for 4 × 5.'); }
+      else if (draft.ret) { Object.assign(L, newLift(), { w: v + m.inc }); notes.push(m.name + ': next week is 3 × 5 at ' + (v + m.inc) + ' lb.'); }
       else if (draft.deload) {
         if (L.mode === 'wave' && L.wk === 4) { if (!L.w3hard) L.base += m.inc; L.wk = 1; notes.push(m.name + ': new wave starts at ' + L.base + ' lb for 4 × 5' + (L.w3hard ? ' (same as last wave, since the top week was hard).' : '.')); L.w3hard = false; }
         else if (L.mode === 'linear') { L.since = 0; notes.push(m.name + ': deload done. Back to ' + L.w + ' lb for 4 × 5.'); }
@@ -425,7 +427,8 @@ function applySession(state, draft) {
     entry.items.push(rec);
   }
   if (draft.day === 4) s.d4Deload = false;
-  if (draft.ret) { s.returnLeft = s.returnLeft.filter(d => d !== draft.day); if (!s.returnLeft.length) notes.push('Get-back-into-it week is done. Full sessions start next time.'); }
+  if (draft.ret === 2) { s.ramp2 = s.ramp2.filter(d => d !== draft.day); if (!s.ramp2.length) notes.push('The two-week ramp-up is done. Full sessions start next time.'); }
+  else if (draft.ret) { s.returnLeft = s.returnLeft.filter(d => d !== draft.day); if (!s.returnLeft.length) notes.push('Ramp-up week 1 is done. Week 2 is three sets and a little heavier.'); }
   s.next = (draft.day % 4) + 1; s.draft = null;
   return { state: s, entry, notes };
 }
@@ -520,13 +523,14 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
   /* ---------- today ---------- */
   function hintHtml(d, it, sug) {
     if (it.type === 'main') { const L = state.lifts[it.lift], m = LIFTS[it.lift];
-      if (d.ret) return `<div class="hint">Pick a weight you could do 3 or 4 more reps with. It becomes your starting weight.</div>`;
+      if (d.ret === 2) return `<div class="hint">Leave about 2 reps in the tank. This becomes your starting weight for 4 × 5.</div>`;
+      if (d.ret) return `<div class="hint">Pick a weight you could do 3 or 4 more reps with.</div>`;
       if (sug == null) return `<div class="hint">Enter the weight you use.</div>`;
       if (d.deload) return `<div class="hint down">Deload: about 70%. No rating needed.</div>`;
       if (L.mode === 'wave') return `<div class="hint">Wave week ${L.wk} of 3, then a deload.</div>`;
       if (L.hard >= 1) return `<div class="hint down">Hard last time. Hard again and this lift moves to the 4-week wave.</div>`;
       return `<div class="hint up">Easy or solid today and it goes up ${m.inc} next time.</div>`; }
-    if (sug == null) return `<div class="hint">${it.type === 'reps' ? 'Log what you got.' : d.ret ? 'Go light. Stop well short of failure.' : 'Enter the weight you use, or leave it blank.'}</div>`;
+    if (sug == null) return `<div class="hint">${it.type === 'reps' ? 'Log what you got.' : d.ret === 2 ? 'Leave about 2 reps in the tank.' : d.ret ? 'Go light. Stop well short of failure.' : 'Enter the weight you use, or leave it blank.'}</div>`;
     if (d.deload && it.type === 'range') return `<div class="hint down">Deload: about 70%.</div>`;
     return `<div class="hint">Last time: ${state.acc[it.key]} ${esc(it.type === 'reps' ? (it.unit || 'reps') : (it.unit || 'lb'))}.</div>`;
   }
@@ -572,12 +576,13 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
       return `<button class="pick s${n}" data-act="pick" data-n="${n}" aria-pressed="${d.day === n}" ${progress && d.day !== n ? 'disabled' : ''}>
         <span class="d">Day ${n}${n === state.next ? ' · next up' : ''}</span><span class="n">${esc(s.name)}</span><span class="d">${ld ? 'Last: ' + esc(niceDate(ld)) : esc(s.sub)}</span></button>`; }).join('') + '</div>';
     if (progress) h += `<p class="small muted" style="margin-top:-6px">Finish or discard this session to switch days.</p>`;
-    h += `<div class="meta s${d.day}">${d.ret ? '<span class="pill on">Get-back-into-it week</span>' : `<button class="pill" data-act="deload" aria-pressed="${!!d.deload}">Deload: ${d.deload ? 'on' : 'off'}</button>`}
+    h += `<div class="meta s${d.day}">${d.ret ? `<span class="pill on">Ramp-up week ${d.ret === 2 ? 2 : 1} of 2</span>` : `<button class="pill" data-act="deload" aria-pressed="${!!d.deload}">Deload: ${d.deload ? 'on' : 'off'}</button>`}
       <button class="pill" data-act="short" aria-pressed="${!!d.short}">Short day: ${d.short ? 'on' : 'off'}</button>
       <span class="pill num">${doneCount} of ${items.all.length} done</span><span class="pill num">${in7} of 4 this week</span></div>
       <div class="bar s${d.day}" aria-hidden="true"><i style="width:${items.all.length ? Math.round(doneCount / items.all.length * 100) : 0}%"></i></div>`;
     if (liftedDays.has(1) && liftedDays.has(2) && !liftedDays.has(0) && !progress) h += `<div class="note warn">You lifted the last two days. The rule is no more than two in a row, so today is a rest day or a run or swim.</div>`;
-    if (d.ret) h += `<div class="note">Two sets of everything, nothing close to failure, no box jumps and no add-ons. The weights you log today become your starting numbers.</div>`;
+    if (d.ret === 2) h += `<div class="note">Week 2: three sets, a little heavier, about 2 reps left in the tank. Box jumps and add-ons are back. No ratings yet. Today's weights become your starting numbers.</div>`;
+    else if (d.ret) h += `<div class="note">Week 1: two sets of everything, nothing close to failure, no box jumps and no add-ons.</div>`;
     if (warmDone && !ui.warmOpen) h += `<section class="card"><div class="sechead"><h2>Warmup ${d.skipWarm ? 'skipped' : 'done'}</h2><button class="link" data-act="warmOpen">Show</button></div></section>`;
     else h += `<section class="card"><div class="sechead"><h2>Warmup</h2><small>About 8 minutes</small></div><div class="rows">` +
       D.warm.map(w => `<div class="row${d.warm[w.key] ? ' done' : ''}"><button class="check" data-act="warm" data-key="${w.key}" aria-pressed="${!!d.warm[w.key]}" aria-label="${esc(w.name)} done">${tick}</button>
@@ -586,7 +591,7 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
     h += `<section class="card"><div class="sechead"><h2>${d.short ? 'Must-dos' : 'Core'}</h2><small>Tap the box after each set</small></div>
       ${warmDone ? '' : '<div class="note warn">Finish the warmup to open the lifts.</div>'}
       <div class="rows${warmDone ? '' : ' locked'}">${items.core.map(it => rowHtml(d, it)).join('')}</div></section>`;
-    if (!d.ret && !d.short) {
+    if ((!d.ret || d.ret === 2) && !d.short) {
       const avail = library(state).filter(a => !d.addons.includes(a.key));
       const rec = D.rec.map(k => avail.find(a => a.key === k)).filter(Boolean), rest = avail.filter(a => !D.rec.includes(a.key));
       const chip = (a, r) => `<button class="chip${r ? ' rec' : ''}" data-act="addAddon" data-key="${a.key}">+ ${esc(a.name)} <small class="num">${esc(a.n ? a.n + ' × ' + a.r : a.r)}</small></button>`;
@@ -679,9 +684,9 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
     h += `<section class="card"><div class="sechead"><h2>Working weights</h2><small>Edit any time</small></div>` +
       Object.keys(LIFTS).map(k => { const L = state.lifts[k], v = L.mode === 'wave' ? L.base : L.w;
         return `<div class="field"><span>${LIFTS[k].name}<br><span class="small muted">${liftLine(k)}</span></span><span class="wt"><input id="ww-${k}" inputmode="decimal" data-ww="${k}" value="${v == null ? '' : v}" placeholder="—" aria-label="${LIFTS[k].name} working weight"><span class="unit">lb</span></span></div>`; }).join('') + `</section>`;
-    h += `<section class="card"><div class="sechead"><h2>Get-back-into-it week</h2><small>${state.returnLeft.length ? state.returnLeft.length + ' of 4 days left' : 'Done'}</small></div>
-      <p class="small muted">Each day runs once as a light version: two sets, easy weights, no jumps or add-ons. What you log sets your starting weights.</p>
-      <button class="btn ghost${ui.armed === 'ret' ? ' danger' : ''}" data-act="ret">${ui.armed === 'ret' ? 'Tap again to confirm' : state.returnLeft.length ? 'Skip it and go to full sessions' : 'Run it again (after time off)'}</button></section>`;
+    h += `<section class="card"><div class="sechead"><h2>Ramp-up, 2 weeks</h2><small>${state.returnLeft.length ? 'Week 1: ' + state.returnLeft.length + ' of 4 days left' : state.ramp2.length ? 'Week 2: ' + state.ramp2.length + ' of 4 days left' : 'Done'}</small></div>
+      <p class="small muted">Week 1 runs each day light: two sets, easy weights, no jumps or add-ons. Week 2 is three sets, a step heavier, with jumps and add-ons back. What you log in week 2 sets your starting weights.</p>
+      <button class="btn ghost${ui.armed === 'ret' ? ' danger' : ''}" data-act="ret">${ui.armed === 'ret' ? 'Tap again to confirm' : (state.returnLeft.length || state.ramp2.length) ? 'Skip the rest and go to full sessions' : 'Run it again (after time off)'}</button></section>`;
     h += `<section class="card"><div class="sechead"><h2>Rest timer</h2><small>3:00 after heavy sets, 1:30 after the rest</small></div>
       <button class="toggle" data-act="restOn" aria-pressed="${state.restOn !== false}">${state.restOn !== false ? 'On: starts when you tap a set' : 'Off'}</button></section>`;
     for (const n of [1, 2, 3, 4]) { const D = DAYS[n], fake = { day: n, ret: false, deload: false };
@@ -690,6 +695,7 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
         <h3>Core</h3><ul class="plain">${D.core.map(i => `<li><span>${esc(i.type === 'backoff' ? 'Back-off set' : i.name)}${i.must ? ' <span class="tag">Must do</span>' : ''}</span><span class="num">${esc(i.type === 'main' ? 'heavy sets' : i.type === 'backoff' ? '1 × 8 at 80%' : scheme(state, i, fake))}</span></li>`).join('')}</ul>
         <h3>Recommended add-ons</h3><ul class="plain">${D.rec.map(k => findAddon(state, k)).filter(Boolean).map(i => `<li><span>${esc(i.name)}</span><span class="num">${esc(i.n + ' × ' + i.r)}</span></li>`).join('')}</ul></section>`; }
     h += `<section class="card"><h2>Rules</h2><ul class="rules">
+      <li>The first two weeks are a ramp-up: two easy sets in week 1, three sets a step heavier in week 2. Full sessions start in week 3.</li>
       <li>Go in order: Day 1, 2, 3, 4, then back to 1. Aim for four sessions in any seven days, and never more than two days in a row.</li>
       <li>Squat, bench and trap bar start at 4 × 5. Rate each one easy, solid or hard. Easy or solid adds 5 lb (2.5 on bench) next time.</li>
       <li>Hard twice in a row moves that lift to the wave: 4 × 5, then 4 × 4, then 5 × 3, each 5 lb heavier (2.5 on bench), then a deload. Each new wave starts one step higher.</li>
@@ -717,7 +723,7 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
     for (const l of history.logs) {
       const del = `<button class="link" data-act="delLog" data-key="${l.id}" style="align-self:flex-start">${ui.armed === 'log' + l.id ? 'Tap again to delete this entry' : 'Delete entry'}</button>`;
       if (l.kind === 'cardio') { h += `<section class="card s0"><div class="loghead"><span class="dot"></span><b>${esc(niceDate(l.date))}</b><span class="muted">${esc(l.type)}${l.min ? ' · ' + esc(l.min) + ' min' : ''}${l.dist ? ' · ' + esc(l.dist) : ''}</span></div>${del}</section>`; continue; }
-      h += `<section class="card s${l.day}"><div class="loghead"><span class="dot"></span><b>${esc(niceDate(l.date))}</b><span class="muted">${esc('Day ' + l.day + ': ' + l.name)}</span>${l.ret ? '<span class="pill">Get-back week</span>' : ''}${l.deload ? '<span class="pill">Deload</span>' : ''}${l.short ? '<span class="pill">Short day</span>' : ''}</div>
+      h += `<section class="card s${l.day}"><div class="loghead"><span class="dot"></span><b>${esc(niceDate(l.date))}</b><span class="muted">${esc('Day ' + l.day + ': ' + l.name)}</span>${l.ret ? `<span class="pill">Ramp-up week ${l.ret === 2 ? 2 : 1}</span>` : ''}${l.deload ? '<span class="pill">Deload</span>' : ''}${l.short ? '<span class="pill">Short day</span>' : ''}</div>
         <ul class="plain">${l.items.map(i => `<li><span>${esc(i.n)}</span><span class="num">${esc(i.s)}${i.w != null ? ' · ' + i.w + ' ' + esc(i.u || 'lb') : ''}${i.feel ? ' · ' + i.feel : ''}${i.top ? ' · top' : ''}</span></li>`).join('')}</ul>
         ${!l.short && l.skipped && l.skipped.length ? `<p class="small muted">Skipped: ${esc(l.skipped.join(', '))}</p>` : ''}${del}</section>`; }
     return h + '</div>';
@@ -761,7 +767,7 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
     else if (act === 'closeSummary') { ui.summary = null; }
     else if (act === 'restOn') { state.restOn = state.restOn === false; if (!state.restOn) ui.rest = null; save(); }
     else if (act === 'discard') { if (ui.armed !== 'discard') ui.armed = 'discard'; else { ui.armed = ''; state.draft = null; ui.rest = null; save(); } }
-    else if (act === 'ret') { if (ui.armed !== 'ret') ui.armed = 'ret'; else { ui.armed = ''; state.returnLeft = state.returnLeft.length ? [] : [1, 2, 3, 4]; if (!hasProgress(state.draft)) state.draft = null; save(); } }
+    else if (act === 'ret') { if (ui.armed !== 'ret') ui.armed = 'ret'; else { ui.armed = ''; const on = state.returnLeft.length || state.ramp2.length; state.returnLeft = on ? [] : [1, 2, 3, 4]; state.ramp2 = on ? [] : [1, 2, 3, 4]; if (!hasProgress(state.draft)) state.draft = null; save(); } }
     else if (act === 'delCustom') { state.custom = state.custom.filter(c => c.key !== key); for (const n of [1, 2, 3, 4]) state.pins[n] = (state.pins[n] || []).filter(k => k !== key); if (state.draft) state.draft.addons = state.draft.addons.filter(k => k !== key); save(); }
     else if (act === 'delLog') { if (ui.armed !== 'log' + key) ui.armed = 'log' + key; else { ui.armed = ''; history.logs = history.logs.filter(l => l.id !== key); save('history'); } }
     else if (act === 'copyBackup') { const text = JSON.stringify({ app: 'liftlog', v: 3, state, history }); ui.backup = '';
