@@ -200,6 +200,8 @@ table.t th{font-size:12px;font-weight:500;color:var(--muted);text-align:right;pa
 table.t th:first-child,table.t td:first-child{text-align:left;padding-left:0}
 table.t td{padding:7px 6px;border-bottom:1px solid var(--line);text-align:right}
 textarea.bk{width:100%;min-height:70px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:12px/1.3 ui-monospace,Menlo,monospace;padding:8px}
+label.datefix{display:flex;align-items:center;gap:8px}
+label.datefix input{height:36px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:0 8px;font:inherit;font-size:14px}
 </style>
 </head>
 <body>
@@ -499,6 +501,7 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
   function niceDate(s) { return parseYmd(s).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
   function shortDate(dt) { return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
   function daysAgo(s) { return Math.round((parseYmd(ymd(now())) - parseYmd(s)) / 864e5); }
+  function sortLogs() { history.logs = history.logs.map((l, i) => [l, i]).sort((a, b) => a[0].date < b[0].date ? 1 : a[0].date > b[0].date ? -1 : a[1] - b[1]).map(x => x[0]); }
   const lifts = () => history.logs.filter(l => l.kind !== 'cardio');
   const cardios = () => history.logs.filter(l => l.kind === 'cardio');
   function lastDate(day) { const l = lifts().find(x => x.day === day); return l ? l.date : null; }
@@ -721,7 +724,7 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
     let h = `<div class="stack">`;
     if (!history.logs.length) h += `<div class="note">Nothing logged yet. Finish a session on the Today tab and it shows up here.</div>`;
     for (const l of history.logs) {
-      const del = `<button class="link" data-act="delLog" data-key="${l.id}" style="align-self:flex-start">${ui.armed === 'log' + l.id ? 'Tap again to delete this entry' : 'Delete entry'}</button>`;
+      const del = `<label class="small muted datefix">Date <input type="date" id="dt-${l.id}" data-logdate="${l.id}" value="${esc(l.date)}" max="${ymd(now())}"></label><button class="link" data-act="delLog" data-key="${l.id}" style="align-self:flex-start">${ui.armed === 'log' + l.id ? 'Tap again to delete this entry' : 'Delete entry'}</button>`;
       if (l.kind === 'cardio') { h += `<section class="card s0"><div class="loghead"><span class="dot"></span><b>${esc(niceDate(l.date))}</b><span class="muted">${esc(l.type)}${l.min ? ' · ' + esc(l.min) + ' min' : ''}${l.dist ? ' · ' + esc(l.dist) : ''}</span></div>${del}</section>`; continue; }
       h += `<section class="card s${l.day}"><div class="loghead"><span class="dot"></span><b>${esc(niceDate(l.date))}</b><span class="muted">${esc('Day ' + l.day + ': ' + l.name)}</span>${l.ret ? `<span class="pill">Ramp-up week ${l.ret === 2 ? 2 : 1}</span>` : ''}${l.deload ? '<span class="pill">Deload</span>' : ''}${l.short ? '<span class="pill">Short day</span>' : ''}</div>
         <ul class="plain">${l.items.map(i => `<li><span>${esc(i.n)}</span><span class="num">${esc(i.s)}${i.w != null ? ' · ' + i.w + ' ' + esc(i.u || 'lb') : ''}${i.feel ? ' · ' + i.feel : ''}${i.top ? ' · top' : ''}</span></li>`).join('')}</ul>
@@ -782,7 +785,7 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
       if (!items.some(i => d.done[i.key])) ui.error = 'Finish at least one lift before saving. Tap its box after each set.';
       else { const miss = missingFeel(state, d);
         if (miss.length) ui.error = 'Rate how ' + miss.join(' and ') + ' felt (easy, solid or hard). The progression needs it.';
-        else { const r = applySession(state, d); state = r.state; history.logs.unshift(r.entry); history.logs = history.logs.slice(0, 400);
+        else { d.date = ymd(now()); const r = applySession(state, d); state = r.state; history.logs.unshift(r.entry); sortLogs(); history.logs = history.logs.slice(0, 400);
           ui.summary = { day: d.day, notes: r.notes }; ui.day = null; ui.rest = null; ui.warmOpen = false; ui.menuOpen = false;
           try { ui.wl && ui.wl.release(); } catch (err) {}
           save('history'); render(); window.scrollTo(0, 0); return; } } }
@@ -794,6 +797,8 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
       const p = document.querySelector('[data-plates="' + t.dataset.w + '"]'); if (p) p.textContent = platesPerSide(n); save(); }
     else if (t.dataset.ww) { const L = state.lifts[t.dataset.ww], n = num(t.value); if (L.mode === 'wave') L.base = n == null ? L.base : n; else { L.w = n; L.hard = 0; } save(); }
   });
+  $('#main').addEventListener('change', e => { const t = e.target;
+    if (t.dataset && t.dataset.logdate && /^\d{4}-\d{2}-\d{2}$/.test(t.value) && t.value <= ymd(now())) { const l = history.logs.find(x => x.id === t.dataset.logdate); if (l && l.date !== t.value) { l.date = t.value; sortLogs(); save('history'); render(); } } });
   $('#main').addEventListener('submit', e => {
     e.preventDefault();
     if (e.target.id === 'customForm') {
@@ -804,7 +809,7 @@ if (typeof module !== 'undefined') module.exports = { LIFTS, DAYS, ADDONS, round
     } else if (e.target.id === 'cardioForm') {
       const min = num($('#cdMin').value), dist = $('#cdDist').value.trim();
       if (min == null && !dist) { ui.error = 'Add the minutes or a distance first.'; render(); return; }
-      history.logs.unshift({ id: Date.now().toString(36), kind: 'cardio', date: ymd(now()), type: ui.cardio, min, dist }); ui.error = '';
+      history.logs.unshift({ id: Date.now().toString(36), kind: 'cardio', date: ymd(now()), type: ui.cardio, min, dist }); sortLogs(); ui.error = '';
       ui.summary = { day: 0, notes: [ui.cardio + ' logged for today.'] }; save('history'); render(); window.scrollTo(0, 0);
     }
   });
